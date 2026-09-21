@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { registerAgentPreviewTools } from "../src/agent-tools.mjs";
+import { createAgentPreviewState, registerAgentPreviewTools } from "../src/agent-tools.mjs";
+import { saveCodexCallProfile } from "../src/codex-call-profile.mjs";
 
 // Historical filename retained for suite compatibility. The product contract it
 // now tests is the fixed-text prepared-task flow; Portable/Rich is not a normal surface.
@@ -73,7 +76,14 @@ function agentSnapshot({ agentRef, turnId, finalResult, model, reasoningEffort =
   };
 }
 
-function createHarness({ agentReasoningEffort = true, quotaProvider = async () => quotaSnapshot(), authorityExecutor: authorityExecutorOverride = null } = {}) {
+function createHarness({
+  agentReasoningEffort = true,
+  quotaProvider = async () => quotaSnapshot(),
+  authorityExecutor: authorityExecutorOverride = null,
+  codexCallProfile = false,
+  codexCallProfileFile = null,
+  agentPreviewState = null,
+} = {}) {
   const server = captureServer();
   const starts = [];
   const sends = [];
@@ -152,6 +162,9 @@ function createHarness({ agentReasoningEffort = true, quotaProvider = async () =
     meteredQuotaProvider: quotaProvider,
     agentPortableCard: true,
     agentReasoningEffort,
+    codexCallProfile,
+    codexCallProfileFile,
+    agentPreviewState,
   });
   async function invoke(name, args) {
     const entry = server.tools.get(name);
@@ -159,6 +172,15 @@ function createHarness({ agentReasoningEffort = true, quotaProvider = async () =
     return entry.handler(args);
   }
   return { server, starts, sends, invoke };
+}
+
+function profileFixture(requireCallApproval) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "codexless-agent-prepare-profile-"));
+  const filePath = path.join(root, "profile.md");
+  if (typeof requireCallApproval === "boolean") {
+    saveCodexCallProfile({ filePath, requireCallApproval, instruction: "Use bounded tasks and preserve explicit user approval." });
+  }
+  return { filePath, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 function assertPreparedApproval(result, { task, modelLabel = "Fake Default", model = "fake-default", effort = "medium" } = {}) {
@@ -196,6 +218,122 @@ function assertPreparedApproval(result, { task, modelLabel = "Fake Default", mod
   assert.equal(Object.hasOwn(payload.meteredConsent ?? {}, "consentRef"), false);
   return payload.taskId;
 }
+
+for (const profileState of ["missing", "required", "false"]) {
+  test(`agent_prepare remains consent_required with Call Profile ${profileState}`, async (t) => {
+    const fixture = profileFixture(profileState === "missing" ? null : profileState === "required");
+    t.after(fixture.cleanup);
+    const harness = createHarness({ codexCallProfile: true, codexCallProfileFile: fixture.filePath });
+    const prepared = await harness.invoke("codex.agent_prepare", {
+      prompt: `PREPARE_${profileState.toUpperCase()}`,
+      requestId: `prepare-${profileState}`,
+      cwd: projectRoot,
+      invocationRationale: "Prove the fail-closed preparation boundary.",
+    });
+    assertPreparedApproval(prepared, { task: `PREPARE_${profileState.toUpperCase()}` });
+    assert.equal(prepared.structuredContent.agentRef, null);
+    assert.equal(prepared.structuredContent.turnId, null);
+    assert.equal(harness.starts.length, 0, "prepare must not reach agentExecutor.start/thread-start/turn-start");
+  });
+}
+
+test("agent_prepare is immune to a Profile change to requireCallApproval=false during authority resolution", async (t) => {
+  const fixture = profileFixture(true);
+  t.after(fixture.cleanup);
+  let changed = false;
+  const authorityExecutor = {
+    async resolveAuthority({ cwd }) {
+      if (!changed) {
+        const current = saveCodexCallProfile({
+          filePath: fixture.filePath,
+          requireCallApproval: false,
+          instruction: "Use bounded tasks and preserve explicit user approval.",
+        });
+        assert.equal(current.effective.requireCallApproval, false);
+        changed = true;
+      }
+      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: "prepared-test-authority", permissionCeiling: "prepared-test-authority", authoritySource: "test", trustedAncestor: projectRoot };
+    },
+  };
+  const harness = createHarness({
+    authorityExecutor,
+    codexCallProfile: true,
+    codexCallProfileFile: fixture.filePath,
+  });
+  const prepared = await harness.invoke("codex.agent_prepare", {
+    prompt: "PREPARE_PROFILE_RACE",
+    requestId: "prepare-profile-race",
+    cwd: projectRoot,
+    invocationRationale: "Exercise the Profile mutation race without dispatch.",
+  });
+  const taskId = assertPreparedApproval(prepared, { task: "PREPARE_PROFILE_RACE" });
+  assert.equal(prepared.structuredContent.agentRef, null);
+  assert.equal(prepared.structuredContent.turnId, null);
+  assert.equal(harness.starts.length, 0);
+  assert.match(taskId, /^C-[A-F0-9]{10}$/);
+});
+
+test("agent_prepare uses existing commit/decline lifecycle without pre-commit dispatch", async () => {
+  const commitHarness = createHarness();
+  const prepared = await commitHarness.invoke("codex.agent_prepare", {
+    prompt: "PREPARE_THEN_COMMIT",
+    requestId: "prepare-then-commit",
+    cwd: projectRoot,
+  });
+  const taskId = assertPreparedApproval(prepared, { task: "PREPARE_THEN_COMMIT" });
+  assert.equal(commitHarness.starts.length, 0);
+  const committed = await commitHarness.invoke("codex.agent_commit", { taskId });
+  assert.equal(committed.isError, false);
+  assert.equal(commitHarness.starts.length, 1, "commit is the first and only dispatch");
+  const duplicateCommit = await commitHarness.invoke("codex.agent_commit", { taskId });
+  assert.equal(duplicateCommit.structuredContent.duplicate, true);
+  assert.equal(commitHarness.starts.length, 1);
+
+  const declineHarness = createHarness();
+  const declinePrepared = await declineHarness.invoke("codex.agent_prepare", {
+    prompt: "PREPARE_THEN_DECLINE",
+    requestId: "prepare-then-decline",
+    cwd: projectRoot,
+  });
+  const declineTaskId = assertPreparedApproval(declinePrepared, { task: "PREPARE_THEN_DECLINE" });
+  const declined = await declineHarness.invoke("codex.agent_decline", { taskId: declineTaskId });
+  assert.equal(declined.structuredContent.status, "rejected");
+  const duplicateDecline = await declineHarness.invoke("codex.agent_decline", { taskId: declineTaskId });
+  assert.equal(duplicateDecline.structuredContent.duplicate, true);
+  const staleCommit = await declineHarness.invoke("codex.agent_commit", { taskId: declineTaskId });
+  assert.equal(staleCommit.structuredContent.status, "rejected");
+  assert.equal(staleCommit.structuredContent.duplicate, true);
+  assert.equal(declineHarness.starts.length, 0);
+  const unknown = await declineHarness.invoke("codex.agent_commit", { taskId: "C-0000000000" });
+  assert.equal(unknown.isError, true);
+});
+
+test("a prepared task is not replayed after Codexless state restart", async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "codexless-agent-prepare-restart-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const stateFile = path.join(root, "agent-tasks.json");
+  const firstState = createAgentPreviewState({
+    meteredConsentMode: "always",
+    meteredQuotaProvider: async () => quotaSnapshot(),
+    taskStateFile: stateFile,
+  });
+  const first = createHarness({ agentPreviewState: firstState });
+  const args = { prompt: "PREPARE_BEFORE_RESTART", requestId: "prepare-before-restart", cwd: projectRoot };
+  const prepared = await first.invoke("codex.agent_prepare", args);
+  assertPreparedApproval(prepared, { task: "PREPARE_BEFORE_RESTART" });
+  assert.equal(first.starts.length, 0);
+
+  const restartedState = createAgentPreviewState({
+    meteredConsentMode: "always",
+    meteredQuotaProvider: async () => quotaSnapshot(),
+    taskStateFile: stateFile,
+  });
+  const restarted = createHarness({ agentPreviewState: restartedState });
+  const replay = await restarted.invoke("codex.agent_prepare", args);
+  assert.equal(replay.isError, true);
+  assert.match(replay.structuredContent.error, /no longer identifies a pending Codex preparation/i);
+  assert.equal(restarted.starts.length, 0, "restart recovery must never replay the prepared task");
+});
 
 test("fixed-text prepared approval resolves default and explicit model/effort without exposing historical card controls", async () => {
   const { invoke } = createHarness();

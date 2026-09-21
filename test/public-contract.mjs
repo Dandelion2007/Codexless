@@ -41,7 +41,7 @@ function createIsolatedPublicTestEnv(extra = {}) {
 }
 
 assert.equal(PUBLIC_SURFACE_VERSION, "codexless-public-preview-v1");
-assert.equal(PUBLIC_TOOL_NAMES.length, 44);
+assert.equal(PUBLIC_TOOL_NAMES.length, 45);
 for (const relative of [
   "src/browser-tools.mjs",
   "src/codex-browser-executor.mjs",
@@ -81,7 +81,7 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name);
   assert.deepEqual([...names].sort(), [...PUBLIC_TOOL_NAMES].sort());
-  assert.equal(names.length, 44);
+  assert.equal(names.length, 45);
 
   for (const name of forbiddenNames) {
     assert.equal(names.includes(name), false, `${name} must not be exposed by the public preview`);
@@ -133,7 +133,14 @@ try {
   assert.deepEqual(resources.resources, [], "normal public runtime must not advertise a Rich Card resource");
 
   const startTool = tools.tools.find((tool) => tool.name === "codex.agent_start");
+  const prepareTool = tools.tools.find((tool) => tool.name === "codex.agent_prepare");
   const sendTool = tools.tools.find((tool) => tool.name === "codex.agent_send");
+  assert.deepEqual(prepareTool?.inputSchema?.required, ["prompt", "requestId", "invocationRationale"]);
+  assert.deepEqual(Object.keys(prepareTool?.inputSchema?.properties ?? {}).sort(), ["cwd", "invocationRationale", "model", "presentationLocale", "prompt", "reasoningEffort", "requestId"]);
+  assert.equal(prepareTool?.inputSchema?.additionalProperties, false);
+  assert.equal(Object.hasOwn(prepareTool?.inputSchema?.properties ?? {}, "profileDecision"), false);
+  assert.equal(prepareTool?.annotations?.destructiveHint, false);
+  assert.match(prepareTool?.description ?? "", /always stops at consent_required|never calls agentExecutor\.start/i);
   assert.equal(startTool?._meta?.ui?.resourceUri, undefined);
   assert.equal(startTool?._meta?.["openai/outputTemplate"], undefined);
   assert.equal(Object.hasOwn(startTool?.inputSchema?.properties ?? {}, "consentRef"), false);
@@ -328,7 +335,7 @@ try {
     await httpClient.connect(httpTransport);
     const httpTools = await httpClient.listTools();
     const httpNames = httpTools.tools.map((tool) => tool.name);
-    assert.equal(httpNames.length, 44);
+    assert.equal(httpNames.length, 45);
     assert.deepEqual([...httpNames].sort(), [...PUBLIC_TOOL_NAMES].sort());
     for (const name of forbiddenNames) {
       assert.equal(httpNames.includes(name), false, `${name} must not be exposed by the public HTTP preview`);

@@ -1930,6 +1930,148 @@ export function registerAgentPreviewTools(server, {
     }))
   );
 
+  function preparedStartResponse(record, boundProfile, payload) {
+    if (record.terminalSnapshot) return structuredClone(record.terminalSnapshot);
+    const pending = consentRequiredSnapshot({ consent: record.consent, taskCard: record.taskCard, portableTaskBody: record.portableTaskBody });
+    pending.taskRef = record.taskRef;
+    pending.taskId = record.shortTaskId ?? record.taskRef;
+    pending.shortTaskId = record.shortTaskId ?? null;
+    pending.turnId = null;
+    pending.callProfile = boundProfile;
+    pending.timing = { startedAt: null, endedAt: null, durationMs: null };
+    pending.execution = {
+      requestedModel: payload.model ?? null,
+      ...(agentReasoningEffort && typeof payload.reasoningEffort === "string"
+        ? { requestedReasoningEffort: payload.reasoningEffort }
+        : {}),
+      resolvedModel: null,
+      modelProvider: null,
+      serviceTier: null,
+      reasoningEffort: null,
+    };
+    return pending;
+  }
+
+  server.registerTool(
+    "codex.agent_prepare",
+    {
+      title: "Prepare Codex Agent",
+      description:
+        `Experimental Preview. Prepare one exact server-bound Codex agent start without dispatching it. This tool always stops at consent_required, regardless of the current Codex Call Profile requireCallApproval value. It never calls agentExecutor.start, thread/start, or turn/start and never returns an agentRef or turnId. The returned Task ID is consumed only by codex.agent_commit or codex.agent_decline. The next user-visible assistant response MUST equal the returned content[0].text / chatPresentation.text verbatim, with no prose before or after, no summary, rewrite, reordering, translation, or field omission. requestId is a caller-stable idempotency key and MUST be reused only for retries of the same logical preparation.${agentReasoningEffort ? " reasoningEffort is validated against the current effective model catalog; no global effort enum is hard-coded." : ""} The caller cannot choose or widen Codex permission profile, sandbox, roots, network authority, or other authority ceilings.`,
+      inputSchema: z.object({
+        prompt: z.string().min(1).max(200_000),
+        requestId: z.string().min(1).max(512)
+          .describe("Stable caller-generated idempotency key. Reuse this exact value for retries of the same logical preparation."),
+        cwd: z.string().min(1).max(32_768).optional()
+          .describe("Optional execution-directory context. Codexless resolves authority locally for this cwd; cwd is not a permission selector."),
+        presentationLocale: z.string().min(2).max(64).optional()
+          .describe("Optional current Chat/Host locale used only for the fixed approval text. It never changes Codex authority."),
+        model: z.string().min(1).max(512).optional()
+          .describe("Optional exact model id from codex.model_list. Omit to use Codex's current default model routing."),
+        ...(agentReasoningEffort ? {
+          reasoningEffort: z.string().min(1).max(128).optional()
+            .describe("Optional reasoning effort string supported by the effective model's current codex.model_list entry."),
+        } : {}),
+        ...(codexCallProfile ? {
+          invocationRationale: z.string().min(1).max(4_000)
+            .describe("Free-form current-task reason why the caller decided Codex should be prepared. Shown as Why Codex; it cannot bypass approval."),
+        } : {}),
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: {
+        "openai/toolInvocation/invoking": "Preparing Codex task…",
+        "openai/toolInvocation/invoked": "Codex task awaiting approval.",
+      },
+    },
+    async ({ prompt, requestId, cwd, presentationLocale, model, reasoningEffort, invocationRationale }, toolContext) => structuredCard(async () => {
+      assertFormalAgentAvailable();
+      const resolvedPresentationLocale = resolvePresentationLocale(presentationLocale, toolContext);
+      const startCallerIntent = {
+        prompt,
+        callerCwd: cwd ?? null,
+        presentationLocale: resolvedPresentationLocale,
+        callerModel: model ?? null,
+        callerReasoningEffort: agentReasoningEffort ? reasoningEffort ?? null : null,
+        ...(codexCallProfile ? { callerInvocationRationale: invocationRationale ?? null } : {}),
+      };
+      const priorByCallerIntent = await existingRequestByCallerIntent({
+        requestId,
+        action: "start",
+        payload: startCallerIntent,
+        agentRef: null,
+      });
+      if (priorByCallerIntent) {
+        if (priorByCallerIntent.status !== "consent_required") {
+          throw new Error(`requestId ${requestId} no longer identifies a pending Codex preparation`);
+        }
+        return { ...priorByCallerIntent, duplicate: true };
+      }
+
+      const loadedProfile = readCallProfile();
+      const activeProfile = loadedProfile.status === "configured"
+        ? loadedProfile
+        : {
+            ...loadedProfile,
+            effective: { requireCallApproval: true },
+            instruction: loadedProfile.status === "missing" ? DEFAULT_CODEX_CALL_PROFILE_INSTRUCTION.trim() : "",
+            legacy: false,
+          };
+      const boundProfile = callProfileSnapshot(activeProfile);
+      const authority = await resolveFormalAgentStartAuthority(cwd ?? null);
+      const callerPayload = {
+        ...startCallerIntent,
+        cwd: authority.effectiveCwd,
+        model: model ?? null,
+        permissionProfile: authority.permissionProfile,
+        ...(codexCallProfile ? { invocationRationale: invocationRationale.trim() } : {}),
+        ...(agentReasoningEffort && reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        ...(boundProfile ? { callProfile: boundProfile } : {}),
+      };
+
+      const prior = await existingRequestState({ requestId, action: "start", payload: callerPayload, agentRef: null });
+      if (prior) {
+        if (prior.status !== "consent_required") {
+          throw new Error(`requestId ${requestId} no longer identifies a pending Codex preparation`);
+        }
+        return { ...prior, duplicate: true };
+      }
+
+      let preparedSelection = null;
+      if (agentPortableCard && meteredConsent.mode === "always") {
+        preparedSelection = await resolvePreparedModelSelection({
+          requestedModel: model ?? null,
+          requestedReasoningEffort: agentReasoningEffort ? reasoningEffort ?? null : null,
+        });
+      }
+      const payload = preparedSelection ? {
+        ...callerPayload,
+        model: preparedSelection.selectedModel,
+        ...(agentReasoningEffort && typeof preparedSelection.selectedReasoningEffort === "string"
+          ? { reasoningEffort: preparedSelection.selectedReasoningEffort }
+          : {}),
+        modelSelection: preparedSelection,
+      } : callerPayload;
+
+      const consent = await meteredConsent.authorize({
+        action: "start",
+        requestId,
+        payload,
+        consentRef: null,
+      });
+      if (consent.authorized || !consent.consent?.consentRef) {
+        throw new Error("codex.agent_prepare requires a pending metered consent record and will not dispatch without one");
+      }
+      const record = rememberPrepared({
+        consent: consent.consent,
+        action: "start",
+        payload,
+        cwd: authority.effectiveCwd,
+        permissionProfile: authority.permissionProfile,
+      });
+      return preparedStartResponse(record, boundProfile, payload);
+    })
+  );
+
   server.registerTool(
     "codex.agent_start",
     {
@@ -2061,25 +2203,7 @@ export function registerAgentPreviewTools(server, {
           cwd: authority.effectiveCwd,
           permissionProfile: authority.permissionProfile,
         });
-        if (record.terminalSnapshot) return structuredClone(record.terminalSnapshot);
-        const pending = consentRequiredSnapshot({ consent: consent.consent, taskCard: record.taskCard, portableTaskBody: record.portableTaskBody });
-        pending.taskRef = record.taskRef;
-        pending.taskId = record.shortTaskId ?? record.taskRef;
-        pending.shortTaskId = record.shortTaskId ?? null;
-        pending.turnId = null;
-        pending.callProfile = boundProfile;
-        pending.timing = { startedAt: null, endedAt: null, durationMs: null };
-        pending.execution = {
-          requestedModel: payload.model ?? null,
-          ...(agentReasoningEffort && typeof payload.reasoningEffort === "string"
-            ? { requestedReasoningEffort: payload.reasoningEffort }
-          : {}),
-          resolvedModel: null,
-          modelProvider: null,
-          serviceTier: null,
-          reasoningEffort: null,
-        };
-        return pending;
+        return preparedStartResponse(record, boundProfile, payload);
       }
 
       if (consent.autoCommittedByProfile && consent.consent) {
