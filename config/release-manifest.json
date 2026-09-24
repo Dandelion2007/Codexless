@@ -17,7 +17,7 @@
       }
     }
   },
-  "buildId": "74908849e377ea8b87db1b96a9abc25b3536505e809ef3f1f8b67b8fc198ddb8",
+  "buildId": "6fede8dec5b4bfa582cc66396624a9207d2dad70571085da0aef4eb4e187eef9",
   "files": [
     { "path": "EXPORT_SYNC.md", "sha256": "2016ca37f280451a76cdb95f7223e0aa60f4a4743a41df0e11d6b4157231a839" },
     { "path": "LICENSE", "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4" },
@@ -46,7 +46,7 @@
     { "path": "scripts/bootstrap.mjs", "sha256": "0cb1a5152f3ed9e7c18ad37e77300560fd0bd57e22dc5c5f20d0a8baafe817e2" },
     { "path": "scripts/check-release.mjs", "sha256": "2aa874631c81910a03ea2485da7412f9591828449a87d5daa162bb324a767b19" },
     { "path": "scripts/compatibility-report.mjs", "sha256": "fa01baf8f4080c3b516765f78120e199ab24b3dc652c9ed5f6ea1694dd818d17" },
-    { "path": "scripts/doctor.mjs", "sha256": "c46760054a2dbbf039582e9544a5dec5ba39a5dae248006884b52b8560354d2e" },
+    { "path": "scripts/doctor.mjs", "sha256": "e48b849342168a9a440b05b09e59a02cb8b041d26d5dea4f70ebe051c4e421e0" },
     { "path": "scripts/generate-release-manifest.mjs", "sha256": "77b380ff6c29ff0900f452ad26536869ab4a81fe22bc198d78a0d36abd715aaa" },
     { "path": "scripts/install.ps1", "sha256": "f501c07b6e1d09ed56df823d96d2a5dc303b2fc9a6a12992333b33b801a2f625" },
     { "path": "scripts/install.sh", "sha256": "fdabc240866ff28d09e92cb25a39c3952dbc2feddeb0393ee7a486975daa0b45" },

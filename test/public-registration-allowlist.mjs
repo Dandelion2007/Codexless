@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createPublicToolRegistrationGate } from "../src/public-server-factory.mjs";
+import { PUBLIC_TOOL_NAMES } from "../src/surface-contracts.mjs";
 
 function fakeServer() {
   const tools = [];
@@ -10,6 +11,17 @@ function fakeServer() {
     registerTool(name, config, handler) { tools.push({ name, config, handler }); return name; },
     registerResource(...args) { resources.push(args); return args[0]; },
   };
+}
+
+{
+  const raw = fakeServer();
+  const gate = createPublicToolRegistrationGate(raw);
+  for (const name of PUBLIC_TOOL_NAMES) gate.server.registerTool(name, {}, () => null);
+  assert.deepEqual(gate.assertComplete(), {
+    expectedCount: PUBLIC_TOOL_NAMES.length,
+    registeredCount: PUBLIC_TOOL_NAMES.length,
+    skippedToolNames: [],
+  }, "the canonical 45-tool public allowlist must register exactly once");
 }
 
 {
@@ -29,6 +41,13 @@ function fakeServer() {
   gate.server.registerTool("codex.private_future", {}, () => null);
   assert.throws(() => gate.assertComplete(), /PUBLIC_TOOL_REGISTRATION_INCOMPLETE:codex.required/);
   assert.equal(raw.tools.length, 0, "an unknown tool must never reach the real MCP server");
+}
+{
+  const raw = fakeServer();
+  const gate = createPublicToolRegistrationGate(raw, { allowedToolNames: ["codex.required"] });
+  gate.server.registerTool("codex.renamed", {}, () => null);
+  assert.throws(() => gate.assertComplete(), /PUBLIC_TOOL_REGISTRATION_INCOMPLETE:codex.required/, "renaming a registered tool must leave its canonical name missing");
+  assert.equal(raw.tools.length, 0, "a renamed tool must never reach the real MCP server");
 }
 
 {

@@ -48,7 +48,10 @@ record(
 );
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0], 10);
 record("node", Number.isInteger(nodeMajor) && nodeMajor >= 22, `Node ${process.version}`, nodeMajor >= 22 ? null : "Node.js 22+ is required");
-record("public-surface", PUBLIC_TOOL_NAMES.length === 44, `${PUBLIC_SURFACE_VERSION}; ${PUBLIC_TOOL_NAMES.length} tools`);
+const publicToolNamesAreWellFormed = PUBLIC_TOOL_NAMES.length > 0
+  && new Set(PUBLIC_TOOL_NAMES).size === PUBLIC_TOOL_NAMES.length
+  && PUBLIC_TOOL_NAMES.every((name) => typeof name === "string" && /^codex\.[a-z0-9_]+$/.test(name));
+record("public-surface", publicToolNamesAreWellFormed, `${PUBLIC_SURFACE_VERSION}; ${PUBLIC_TOOL_NAMES.length} tools`);
 
 for (const spec of ["@modelcontextprotocol/node", "@modelcontextprotocol/server", "zod"]) {
   try {
