@@ -17,7 +17,7 @@
       }
     }
   },
-  "buildId": "6fede8dec5b4bfa582cc66396624a9207d2dad70571085da0aef4eb4e187eef9",
+  "buildId": "014f14d8c11568429cc61d017525cd95b188fb5b61716ae05c292babe789173d",
   "files": [
     { "path": "EXPORT_SYNC.md", "sha256": "2016ca37f280451a76cdb95f7223e0aa60f4a4743a41df0e11d6b4157231a839" },
     { "path": "LICENSE", "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4" },
@@ -63,7 +63,7 @@
     { "path": "skills/codexless-browser-repair/SKILL.md", "sha256": "43b24574da21f09ee625e56b56ff753a03f6d35043c1fb3203ae47f43097f647" },
     { "path": "src/agent-card-ui.mjs", "sha256": "7c746482191e781afe6fc2dcb7a9ce41b322007fce4ac2a5d4703a21feca5c91" },
     { "path": "src/agent-resource.mjs", "sha256": "585528b34d8a3f4b4e4d1e797724628972cb1e9d2d843766a12401c4c2f23382" },
-    { "path": "src/agent-tools.mjs", "sha256": "b1e2dae9ee9ef2db097b72a354f12f9eeee978c0c7c0e99f8c4b1be06503f7ba" },
+    { "path": "src/agent-tools.mjs", "sha256": "94351bd10da53970a7b8fd67e119b8fd284373401dc944300ba1768dbafa07ba" },
     { "path": "src/bootstrap-archive.mjs", "sha256": "8ad353e63399126b4a9c766194ee360a767c7d9e2158d19f024b96e64d5e5f3f" },
     { "path": "src/bootstrap-persistence.mjs", "sha256": "5641812542306bfb48d0503721fc9d586ae987fcc23c4c4e4032d7543a2d68a5" },
     { "path": "src/bootstrap-updater.mjs", "sha256": "8fc1d19dfebcb956aa8b9887190830efc13141253ae407cb14b8629ffc428c3f" },
@@ -72,9 +72,9 @@
     { "path": "src/browser-model-route-probe.mjs", "sha256": "2b0cc93ad064543b09a276cb2be8d031b926cc62c6cfe11bd916a8e2a592f07b" },
     { "path": "src/browser-runtime-compat.mjs", "sha256": "97dc1da61d45a7a8b5d4f9e5ed9ae82ba981c01c99e41a038957b3e85631e77a" },
     { "path": "src/browser-tools.mjs", "sha256": "877ef9ef383fc1208a3d15bdd31d77a9f1477be1e7e29978f05063fc9234c27c" },
-    { "path": "src/codex-agent-executor.mjs", "sha256": "5b73559d89f163ed7c3ba2b7b69f98792a1d7a3b0f983e46f8c20b39c9d7d60c" },
+    { "path": "src/codex-agent-executor.mjs", "sha256": "4b97775799ce20b2df75265f5879e2d7dbbcb3be352c8e9c15013279fa936b26" },
     { "path": "src/codex-app-server-client.mjs", "sha256": "641ec966f3a9e18857e0b0551de0298bc120ae18f30a73d2ec50d3d9cfc5d84c" },
-    { "path": "src/codex-authority-executor.mjs", "sha256": "d73d839119982a0afb8bdcc0e23c656b40112eb396f8af78caee900a645f00e0" },
+    { "path": "src/codex-authority-executor.mjs", "sha256": "eadf5c27a129b96fdc26d54955dcefe199c5fa7038e18f1ebcf8d1d8623d3d29" },
     { "path": "src/codex-bin.mjs", "sha256": "979c26ca4cd52c40a43a93bdc4c30e962b8eb9c374dbee7f1bdff0b67a24094e" },
     { "path": "src/codex-browser-executor.mjs", "sha256": "70d4e35036505012a5fee9250f3b50281bd4998a9e9eaa8e4aea775817b6ff71" },
     { "path": "src/codex-call-profile.mjs", "sha256": "87b136e5cb0e3af7e90a9d7c808ad098a1c5649f94d2490e1c07d3897d180906" },

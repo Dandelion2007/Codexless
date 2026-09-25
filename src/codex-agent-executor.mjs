@@ -3,14 +3,16 @@ import path from "node:path";
 import { CodexAppServerClient } from "./codex-app-server-client.mjs";
 import { buildAgentResourceReceipt } from "./agent-resource.mjs";
 import { projectCodexModel } from "./codex-model-catalog.mjs";
+import { boundedAuthorityBindingFromStarted } from "./codex-authority-executor.mjs";
 
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 const DEFAULT_MAX_EVENTS = 128;
 const MAX_EVENT_TEXT_CHARS = 2_048;
 
-function hashRequest(cwd, task, model = null, reasoningEffort = null) {
+function hashRequest(cwd, task, model = null, reasoningEffort = null, authorityBinding = null) {
   const base = `${cwd}\0${task}\0${model ?? ""}`;
-  const material = reasoningEffort === null ? base : `${base}\0reasoningEffort=${reasoningEffort}`;
+  const withEffort = reasoningEffort === null ? base : `${base}\0reasoningEffort=${reasoningEffort}`;
+  const material = `${withEffort}\0authorityBinding=${authorityBinding ? JSON.stringify(authorityBinding) : ""}`;
   return createHash("sha256").update(material, "utf8").digest("hex");
 }
 
@@ -288,7 +290,7 @@ export class CodexAgentExecutor {
     };
   }
 
-  async start({ cwd = this.#defaultCwd, task, clientRequestId = null, permissionProfile = null, model = null, reasoningEffort = null }) {
+  async start({ cwd = this.#defaultCwd, task, clientRequestId = null, permissionProfile = null, expectedAuthorityBinding = null, model = null, reasoningEffort = null }) {
     this.#assertOpen();
     if (typeof task !== "string" || !task.trim()) throw new Error("task must be a non-empty string");
     if (clientRequestId !== null && (typeof clientRequestId !== "string" || !clientRequestId.trim())) {
@@ -297,11 +299,17 @@ export class CodexAgentExecutor {
     if (permissionProfile !== null && (typeof permissionProfile !== "string" || !permissionProfile.trim())) {
       throw new Error("permissionProfile must be a non-empty string when provided");
     }
+    if (permissionProfile && !expectedAuthorityBinding) {
+      throw new Error("formal agent start requires a server-bound authority projection");
+    }
+    if (expectedAuthorityBinding && expectedAuthorityBinding.permissionProfile !== permissionProfile) {
+      throw new Error("formal agent authority binding does not match the requested permission profile");
+    }
     const requestedModel = normalizeModel(model);
     const requestedReasoningEffort = normalizeReasoningEffort(reasoningEffort);
 
     const effectiveCwd = path.resolve(cwd);
-    const requestHash = hashRequest(effectiveCwd, task, requestedModel, requestedReasoningEffort);
+    const requestHash = hashRequest(effectiveCwd, task, requestedModel, requestedReasoningEffort, expectedAuthorityBinding);
     if (clientRequestId) {
       const prior = this.#clientRequestIds.get(clientRequestId);
       if (prior) {
@@ -382,6 +390,12 @@ export class CodexAgentExecutor {
           throw new Error(
             `thread/start authority mismatch: expected ${permissionProfile}, got ${String(activeProfile ?? "missing")}`
           );
+        }
+      }
+      if (expectedAuthorityBinding) {
+        const observedBinding = boundedAuthorityBindingFromStarted(started, permissionProfile);
+        if (JSON.stringify(observedBinding) !== JSON.stringify(expectedAuthorityBinding)) {
+          throw new Error("thread/start authority binding mismatch; no Codex turn was started");
         }
       }
       const expectedModel = requestedModel ?? validatedReasoningModel;

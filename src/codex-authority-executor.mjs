@@ -12,6 +12,24 @@ const COMPATIBILITY_PROBE_MARKER = "TOOLWIRE_CODEX_CONTRACT_OK";
 const WINDOWS_LAUNCHABLE_EXTENSIONS = new Set([".exe", ".com", ".cmd", ".bat"]);
 const WINDOWS_INVALID_BASENAME = /[<>:"/\\|?*\u0000-\u001F]/;
 const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+// Deliberately small and safe to persist with a prepared formal task. This is
+// not a caller input and never exposes roots or other sandbox details.
+export function boundedAuthorityBindingFromStarted(started, permissionProfile) {
+  if (permissionProfile !== ":read-only") {
+    throw new Error("authority binding failed closed: v1 supports only the complete :read-only authority identity");
+  }
+  const sandbox = started?.sandbox;
+  if (!sandbox || typeof sandbox !== "object" || Array.isArray(sandbox)) {
+    throw new Error("authority binding failed closed: thread/start returned no sandbox projection");
+  }
+  if (sandbox.type !== "readOnly" || Object.keys(sandbox).some((key) => key !== "type" && key !== "networkAccess")) {
+    throw new Error("authority binding failed closed: thread/start returned an unsupported sandbox projection");
+  }
+  if (typeof sandbox.networkAccess !== "boolean") {
+    throw new Error("authority binding failed closed: thread/start sandbox networkAccess is missing or invalid");
+  }
+  return Object.freeze({ permissionProfile, sandboxType: sandbox.type, networkAccess: sandbox.networkAccess });
+}
 
 export function isSafeWindowsBareExecutableName(value) {
   if (typeof value !== "string" || !value || value === "." || value === "..") return false;
@@ -405,7 +423,7 @@ export class CodexAuthorityExecutor {
     }
   }
 
-  async resolveAuthority({ cwd = null, access = "inherit", timeoutMs = 10_000 } = {}) {
+  async resolveAuthority({ cwd = null, access = "inherit", timeoutMs = 10_000, requireBoundedAuthorityBinding = false } = {}) {
     if (!SUPPORTED_ACCESS.has(access)) {
       throw new Error(`unsupported access mode: ${access}`);
     }
@@ -424,7 +442,7 @@ export class CodexAuthorityExecutor {
     const client = this.#newClient(effectiveCwd, timeoutMs + this.#watchdogGraceMs);
     await client.start();
     try {
-      return await this.#resolveAuthorityWithClient(client, effectiveCwd, access, timeoutMs);
+      return await this.#resolveAuthorityWithClient(client, effectiveCwd, access, timeoutMs, requireBoundedAuthorityBinding);
     } finally {
       await client.close();
     }
@@ -518,7 +536,7 @@ export class CodexAuthorityExecutor {
     }
   }
 
-  async #resolveAuthorityWithClient(client, effectiveCwd, access, timeoutMs) {
+  async #resolveAuthorityWithClient(client, effectiveCwd, access, timeoutMs, requireBoundedAuthorityBinding = false) {
     const configRead = await client.request("config/read", {
       cwd: effectiveCwd,
       includeLayers: false,
@@ -573,13 +591,18 @@ export class CodexAuthorityExecutor {
       throw new Error(`requested Codexless downscope is not available in Codex: ${permissionProfile}`);
     }
 
-    return {
+    const resolved = {
       effectiveCwd,
       permissionProfile,
       permissionCeiling: authority.profileId,
       authoritySource: authority.source,
       trustedAncestor: authority.trustedAncestor,
+      ...(authority.authorityBinding ? { authorityBinding: authority.authorityBinding } : {}),
     };
+    if (requireBoundedAuthorityBinding && !resolved.authorityBinding) {
+      throw new Error("authority binding failed closed: formal task has no server-proven sandbox/network projection");
+    }
+    return resolved;
   }
 
   async #resolveCodexProfile(
@@ -645,6 +668,9 @@ export class CodexAuthorityExecutor {
         ? "trusted-read-only-downscope"
         : "codex-quiet-profile-resolver",
       trustedAncestor: trusted.root,
+      ...(normalizedAuthority.profileId === ":read-only"
+        ? { authorityBinding: boundedAuthorityBindingFromStarted(started, normalizedAuthority.profileId) }
+        : {}),
     };
   }
 

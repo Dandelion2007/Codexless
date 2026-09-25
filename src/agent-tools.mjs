@@ -1123,10 +1123,10 @@ export function registerAgentPreviewTools(server, {
 
   async function resolveFormalAgentStartAuthority(cwd) {
     try {
-      return await authorityExecutor.resolveAuthority({ cwd, access: "inherit" });
+      return await authorityExecutor.resolveAuthority({ cwd, access: "inherit", requireBoundedAuthorityBinding: true });
     } catch (error) {
       if (!isAmbiguousInheritedAuthority(error)) throw error;
-      return authorityExecutor.resolveAuthority({ cwd, access: "readOnly" });
+      return authorityExecutor.resolveAuthority({ cwd, access: "readOnly", requireBoundedAuthorityBinding: true });
     }
   }
 
@@ -1324,6 +1324,7 @@ export function registerAgentPreviewTools(server, {
       message: action === "send" ? payload?.message ?? null : null,
       cwd: action === "start" ? payload?.cwd ?? null : null,
       permissionProfile: action === "start" ? payload?.permissionProfile ?? null : null,
+      authorityBinding: action === "start" ? payload?.authorityBinding ?? null : null,
       model: hasCallerModel ? payload?.callerModel ?? null : payload?.model ?? null,
       invocationRationale: action === "start" ? payload?.invocationRationale ?? null : null,
       presentationLocale: payload?.presentationLocale ?? null,
@@ -1353,7 +1354,7 @@ export function registerAgentPreviewTools(server, {
     return createHash("sha256").update(JSON.stringify(bound), "utf8").digest("hex");
   }
 
-  function taskCardFor({ taskRef, shortTaskId = null, requestId, action, payload, cwd = null, permissionProfile = null, quota = null }) {
+  function taskCardFor({ taskRef, shortTaskId = null, requestId, action, payload, cwd = null, permissionProfile = null, authorityBinding = null, quota = null }) {
     const card = {
       kind: "codex_task",
       taskRef,
@@ -1371,6 +1372,7 @@ export function registerAgentPreviewTools(server, {
       presentationLocale: normalizePresentationLocale(payload?.presentationLocale ?? "en"),
       cwd,
       permissionProfile,
+      ...(authorityBinding ? { authorityBinding: structuredClone(authorityBinding) } : {}),
       quota,
       ...(payload?.callProfile ? { callProfile: structuredClone(payload.callProfile) } : {}),
     };
@@ -1542,7 +1544,7 @@ export function registerAgentPreviewTools(server, {
     return recoveredTaskState(persisted.taskRef);
   }
 
-  function rememberPrepared({ consent, action, payload, cwd = null, permissionProfile = null, agentRef = null }) {
+  function rememberPrepared({ consent, action, payload, cwd = null, permissionProfile = null, authorityBinding = null, agentRef = null }) {
     const existing = preparedMetered.get(consent.consentRef);
     if (existing) return existing;
     const { taskRef, shortTaskId } = newTaskIdentity();
@@ -1557,6 +1559,7 @@ export function registerAgentPreviewTools(server, {
       callerIntentHash: callerIntentHash(action, payload, agentRef),
       cwd,
       permissionProfile,
+      authorityBinding,
       subjectRef: agentRef,
       agentRef,
       authorized: false,
@@ -1565,7 +1568,7 @@ export function registerAgentPreviewTools(server, {
       toolError: null,
       declinedAt: null,
       portableTaskBody: boundedPortableBody(action === "start" ? payload?.prompt : payload?.message),
-      taskCard: taskCardFor({ taskRef, shortTaskId, requestId: consent.requestId, action, payload, cwd, permissionProfile, quota: consent.quota }),
+      taskCard: taskCardFor({ taskRef, shortTaskId, requestId: consent.requestId, action, payload, cwd, permissionProfile, authorityBinding, quota: consent.quota }),
     };
     preparedMetered.set(consent.consentRef, record);
     taskRecords.set(taskRef, record);
@@ -1573,7 +1576,7 @@ export function registerAgentPreviewTools(server, {
     return record;
   }
 
-  function directRecord({ action, payload, cwd = null, permissionProfile = null, agentRef = null, requestId }) {
+  function directRecord({ action, payload, cwd = null, permissionProfile = null, authorityBinding = null, agentRef = null, requestId }) {
     const { taskRef, shortTaskId } = newTaskIdentity();
     const consent = { consentRef: null, requestId, quota: null };
     const record = {
@@ -1587,6 +1590,7 @@ export function registerAgentPreviewTools(server, {
       callerIntentHash: callerIntentHash(action, payload, agentRef),
       cwd,
       permissionProfile,
+      authorityBinding,
       subjectRef: agentRef,
       agentRef,
       authorized: false,
@@ -1595,7 +1599,7 @@ export function registerAgentPreviewTools(server, {
       toolError: null,
       declinedAt: null,
       portableTaskBody: boundedPortableBody(action === "start" ? payload?.prompt : payload?.message),
-      taskCard: taskCardFor({ taskRef, shortTaskId, requestId, action, payload, cwd, permissionProfile, quota: null }),
+      taskCard: taskCardFor({ taskRef, shortTaskId, requestId, action, payload, cwd, permissionProfile, authorityBinding, quota: null }),
     };
     taskRecords.set(taskRef, record);
     persistRecord(record, null, "pending");
@@ -1684,6 +1688,7 @@ export function registerAgentPreviewTools(server, {
       pending.taskId = record.shortTaskId ?? record.taskRef;
       pending.shortTaskId = record.shortTaskId ?? null;
       pending.turnId = null;
+      pending.authorityBinding = structuredClone(record.authorityBinding);
       pending.timing = { startedAt: null, endedAt: null, durationMs: null };
       pending.execution = {
         requestedModel: typeof record.payload?.model === "string" ? record.payload.model : null,
@@ -1758,7 +1763,8 @@ export function registerAgentPreviewTools(server, {
     }
     if (record.action === "start") {
       const currentAuthority = await resolveFormalAgentStartAuthority(record.cwd);
-      if (currentAuthority.effectiveCwd !== record.cwd || currentAuthority.permissionProfile !== record.permissionProfile) {
+      if (currentAuthority.effectiveCwd !== record.cwd || currentAuthority.permissionProfile !== record.permissionProfile ||
+          JSON.stringify(currentAuthority.authorityBinding) !== JSON.stringify(record.authorityBinding)) {
         throw new Error("prepared Codex task authority changed; prepare and approve a new task");
       }
     } else if (record.payload?.parentTurnId) {
@@ -1785,6 +1791,7 @@ export function registerAgentPreviewTools(server, {
           task: record.payload.prompt,
           clientRequestId: record.consent.requestId,
           permissionProfile: record.permissionProfile,
+          expectedAuthorityBinding: record.authorityBinding,
           model: record.payload.model ?? null,
           reasoningEffort: record.payload.reasoningEffort ?? null,
         });
@@ -1938,6 +1945,7 @@ export function registerAgentPreviewTools(server, {
     pending.shortTaskId = record.shortTaskId ?? null;
     pending.turnId = null;
     pending.callProfile = boundProfile;
+    pending.authorityBinding = structuredClone(record.authorityBinding);
     pending.timing = { startedAt: null, endedAt: null, durationMs: null };
     pending.execution = {
       requestedModel: payload.model ?? null,
@@ -2023,6 +2031,7 @@ export function registerAgentPreviewTools(server, {
         cwd: authority.effectiveCwd,
         model: model ?? null,
         permissionProfile: authority.permissionProfile,
+        authorityBinding: authority.authorityBinding,
         ...(codexCallProfile ? { invocationRationale: invocationRationale.trim() } : {}),
         ...(agentReasoningEffort && reasoningEffort !== undefined ? { reasoningEffort } : {}),
         ...(boundProfile ? { callProfile: boundProfile } : {}),
@@ -2067,6 +2076,7 @@ export function registerAgentPreviewTools(server, {
         payload,
         cwd: authority.effectiveCwd,
         permissionProfile: authority.permissionProfile,
+        authorityBinding: authority.authorityBinding,
       });
       return preparedStartResponse(record, boundProfile, payload);
     })
@@ -2151,6 +2161,7 @@ export function registerAgentPreviewTools(server, {
         model: model ?? null,
         callerReasoningEffort: agentReasoningEffort ? reasoningEffort ?? null : null,
         permissionProfile: authority.permissionProfile,
+        authorityBinding: authority.authorityBinding,
         ...(codexCallProfile ? {
           callerInvocationRationale: invocationRationale ?? null,
           invocationRationale: boundInvocationRationale,
@@ -2202,6 +2213,7 @@ export function registerAgentPreviewTools(server, {
           payload,
           cwd: authority.effectiveCwd,
           permissionProfile: authority.permissionProfile,
+          authorityBinding: authority.authorityBinding,
         });
         return preparedStartResponse(record, boundProfile, payload);
       }
@@ -2213,6 +2225,7 @@ export function registerAgentPreviewTools(server, {
           payload,
           cwd: authority.effectiveCwd,
           permissionProfile: authority.permissionProfile,
+          authorityBinding: authority.authorityBinding,
         });
         return dispatchPrepared(record);
       }
@@ -2222,6 +2235,7 @@ export function registerAgentPreviewTools(server, {
         payload,
         cwd: authority.effectiveCwd,
         permissionProfile: authority.permissionProfile,
+        authorityBinding: authority.authorityBinding,
         requestId,
       });
       return dispatchPrepared(record);

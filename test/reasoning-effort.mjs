@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { CodexAgentExecutor } from "../src/codex-agent-executor.mjs";
+import { boundedAuthorityBindingFromStarted } from "../src/codex-authority-executor.mjs";
 
 class FakeClient {
   constructor() {
@@ -59,6 +60,8 @@ class FakeClient {
       this.threadEffort = requestedEffort === "high" ? "medium" : requestedEffort ?? "medium";
       return {
         thread: { id: `thread-${this.threadSeq}`, canAcceptDirectInput: true },
+        activePermissionProfile: { id: params.permissions ?? ":read-only" },
+        sandbox: { type: "readOnly", networkAccess: false },
         model: this.threadModel,
         modelProvider: "openai",
         serviceTier: null,
@@ -91,6 +94,18 @@ class FakeClient {
 }
 
 const fake = new FakeClient();
+assert.throws(
+  () => boundedAuthorityBindingFromStarted({
+    sandbox: { type: "workspaceWrite", networkAccess: false, writableRoots: [path.resolve(".")] },
+  }, ":workspace"),
+  /v1 supports only the complete :read-only authority identity/
+);
+assert.throws(
+  () => boundedAuthorityBindingFromStarted({
+    sandbox: { type: "workspaceWrite", networkAccess: false, writableRoots: [path.resolve(".")] },
+  }, ":read-only"),
+  /unsupported sandbox projection/
+);
 const executor = new CodexAgentExecutor({
   defaultCwd: path.resolve("."),
   clientFactory: () => fake,
@@ -150,6 +165,16 @@ const duplicate = await executor.start({
   clientRequestId: "effort-start-1",
   reasoningEffort: "ultra",
 });
+
+const turnsBeforeAuthorityMismatch = fake.requests.filter((entry) => entry.method === "turn/start").length;
+await assert.rejects(
+  () => executor.start({
+    task: "authority mismatch", clientRequestId: "authority-mismatch-1", permissionProfile: ":read-only",
+    expectedAuthorityBinding: { permissionProfile: ":read-only", sandboxType: "readOnly", networkAccess: true },
+  }),
+  /authority binding mismatch/
+);
+assert.equal(fake.requests.filter((entry) => entry.method === "turn/start").length, turnsBeforeAuthorityMismatch);
 assert.equal(duplicate.duplicate, true);
 await assert.rejects(
   () => executor.start({

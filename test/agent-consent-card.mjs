@@ -103,7 +103,7 @@ function createHarness({
   ];
   const authorityExecutor = authorityExecutorOverride ?? {
     async resolveAuthority({ cwd }) {
-      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: "prepared-test-authority", permissionCeiling: "prepared-test-authority", authoritySource: "test", trustedAncestor: projectRoot };
+      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: "prepared-test-authority", permissionCeiling: "prepared-test-authority", authoritySource: "test", trustedAncestor: projectRoot, authorityBinding: { permissionProfile: "prepared-test-authority", sandboxType: "readOnly", networkAccess: false } };
     },
   };
   const agentExecutor = {
@@ -233,6 +233,9 @@ for (const profileState of ["missing", "required", "false"]) {
     assertPreparedApproval(prepared, { task: `PREPARE_${profileState.toUpperCase()}` });
     assert.equal(prepared.structuredContent.agentRef, null);
     assert.equal(prepared.structuredContent.turnId, null);
+    assert.deepEqual(prepared.structuredContent.authorityBinding, {
+      permissionProfile: "prepared-test-authority", sandboxType: "readOnly", networkAccess: false,
+    });
     assert.equal(harness.starts.length, 0, "prepare must not reach agentExecutor.start/thread-start/turn-start");
   });
 }
@@ -252,7 +255,7 @@ test("agent_prepare is immune to a Profile change to requireCallApproval=false d
         assert.equal(current.effective.requireCallApproval, false);
         changed = true;
       }
-      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: "prepared-test-authority", permissionCeiling: "prepared-test-authority", authoritySource: "test", trustedAncestor: projectRoot };
+      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: "prepared-test-authority", permissionCeiling: "prepared-test-authority", authoritySource: "test", trustedAncestor: projectRoot, authorityBinding: { permissionProfile: "prepared-test-authority", sandboxType: "readOnly", networkAccess: false } };
     },
   };
   const harness = createHarness({
@@ -306,6 +309,19 @@ test("agent_prepare uses existing commit/decline lifecycle without pre-commit di
   assert.equal(declineHarness.starts.length, 0);
   const unknown = await declineHarness.invoke("codex.agent_commit", { taskId: "C-0000000000" });
   assert.equal(unknown.isError, true);
+});
+
+test("same requestId duplicate prepare preserves the exact authority binding", async () => {
+  const { invoke, starts } = createHarness();
+  const args = { prompt: "DUPLICATE_BOUND_AUTHORITY", requestId: "duplicate-bound-authority", cwd: projectRoot };
+  const first = await invoke("codex.agent_prepare", args);
+  const duplicate = await invoke("codex.agent_prepare", args);
+  assert.equal(duplicate.structuredContent.duplicate, true);
+  assert.deepEqual(duplicate.structuredContent.authorityBinding, first.structuredContent.authorityBinding);
+  assert.deepEqual(duplicate.structuredContent.authorityBinding, {
+    permissionProfile: "prepared-test-authority", sandboxType: "readOnly", networkAccess: false,
+  });
+  assert.equal(starts.length, 0);
 });
 
 test("a prepared task is not replayed after Codexless state restart", async (t) => {
@@ -397,7 +413,7 @@ test("prepared start conservatively falls back to trusted read-only only for amb
       calls.push(access);
       if (access === "inherit") throw new Error("authority resolver capability gate failed closed: activePermissionProfile is null and config/read provides no explicit default_permissions provenance");
       assert.equal(access, "readOnly");
-      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: ":read-only", permissionCeiling: ":read-only", authoritySource: "trusted-read-only-downscope", trustedAncestor: projectRoot };
+      return { effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: ":read-only", permissionCeiling: ":read-only", authoritySource: "trusted-read-only-downscope", trustedAncestor: projectRoot, authorityBinding: { permissionProfile: ":read-only", sandboxType: "readOnly", networkAccess: false } };
     },
   };
   const { starts, invoke } = createHarness({ authorityExecutor });
@@ -408,6 +424,26 @@ test("prepared start conservatively falls back to trusted read-only only for amb
   assert.equal(committed.isError, false);
   assert.deepEqual(calls, ["inherit", "readOnly", "inherit", "readOnly"]);
   assert.equal(starts[0].permissionProfile, ":read-only");
+});
+
+test("prepared commit fails closed when the bound sandbox or network authority changes", async () => {
+  let calls = 0;
+  const authorityExecutor = {
+    async resolveAuthority({ cwd }) {
+      calls += 1;
+      return {
+        effectiveCwd: path.resolve(cwd ?? projectRoot), permissionProfile: ":read-only", permissionCeiling: ":read-only",
+        authoritySource: "test", trustedAncestor: projectRoot,
+        authorityBinding: { permissionProfile: ":read-only", sandboxType: "readOnly", networkAccess: calls < 2 ? false : true },
+      };
+    },
+  };
+  const { starts, invoke } = createHarness({ authorityExecutor });
+  const prepared = await invoke("codex.agent_prepare", { prompt: "AUTHORITY_DRIFT", requestId: "authority-drift", cwd: projectRoot });
+  const committed = await invoke("codex.agent_commit", { taskId: prepared.structuredContent.taskId });
+  assert.equal(committed.isError, true);
+  assert.match(committed.structuredContent.error ?? "", /authority changed/i);
+  assert.equal(starts.length, 0);
 });
 
 test("terminal failure remains conspicuous and does not invent unavailable resource fields", async () => {
