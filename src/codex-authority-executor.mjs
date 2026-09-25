@@ -295,6 +295,8 @@ export class CodexAuthorityExecutor {
   #outputBytesCap;
   #acceptedCodexVersions;
   #allowUntrustedReadOnlyBootstrap;
+  #clientFactory;
+  #versionProbe;
   #codexVersion = null;
 
   constructor({
@@ -308,6 +310,8 @@ export class CodexAuthorityExecutor {
     outputBytesCap = 32_768,
     acceptedCodexVersions = null,
     allowUntrustedReadOnlyBootstrap = false,
+    clientFactory = null,
+    versionProbe = null,
   }) {
     if (!codexBin) throw new Error("CodexAuthorityExecutor requires codexBin");
     if (defaultCwd !== null && (typeof defaultCwd !== "string" || !defaultCwd.trim())) {
@@ -334,6 +338,12 @@ export class CodexAuthorityExecutor {
     if (typeof allowUntrustedReadOnlyBootstrap !== "boolean") {
       throw new Error("allowUntrustedReadOnlyBootstrap must be a boolean");
     }
+    if (clientFactory !== null && typeof clientFactory !== "function") {
+      throw new Error("clientFactory must be a function when provided");
+    }
+    if (versionProbe !== null && typeof versionProbe !== "function") {
+      throw new Error("versionProbe must be a function when provided");
+    }
 
     this.#codexBin = codexBin;
     this.#defaultCwd = defaultCwd ? path.resolve(defaultCwd) : null;
@@ -345,6 +355,8 @@ export class CodexAuthorityExecutor {
     this.#outputBytesCap = outputBytesCap;
     this.#acceptedCodexVersions = acceptedCodexVersions === null ? null : new Set(acceptedCodexVersions);
     this.#allowUntrustedReadOnlyBootstrap = allowUntrustedReadOnlyBootstrap;
+    this.#clientFactory = clientFactory;
+    this.#versionProbe = versionProbe;
   }
 
   get codexVersion() {
@@ -364,13 +376,19 @@ export class CodexAuthorityExecutor {
       this.#defaultCwd = await this.#validateCwd(this.#defaultCwd);
     }
 
-    const { stdout } = await execFileAsync(this.#codexBin, ["--version"], {
-      cwd: this.#defaultCwd ?? process.cwd(),
-      ...(this.#launchEnv ? { env: this.#launchEnv } : {}),
-      windowsHide: true,
-      timeout: 10_000,
-      maxBuffer: 1024 * 1024,
-    });
+    const stdout = this.#versionProbe
+      ? await this.#versionProbe({
+          codexBin: this.#codexBin,
+          cwd: this.#defaultCwd ?? process.cwd(),
+          launchEnv: this.#launchEnv ? { ...this.#launchEnv } : null,
+        })
+      : (await execFileAsync(this.#codexBin, ["--version"], {
+          cwd: this.#defaultCwd ?? process.cwd(),
+          ...(this.#launchEnv ? { env: this.#launchEnv } : {}),
+          windowsHide: true,
+          timeout: 10_000,
+          maxBuffer: 1024 * 1024,
+        })).stdout;
     const match = String(stdout).match(/codex-cli\s+([^\s]+)/i);
     if (!match) throw new Error(`unable to parse Codex CLI version from: ${String(stdout).trim()}`);
     this.#codexVersion = match[1];
@@ -573,11 +591,13 @@ export class CodexAuthorityExecutor {
       );
     }
     const authority = this.#profileOverride
-      ? {
-          profileId: this.#profileOverride,
-          source: "host-profile-override",
-          trustedAncestor: trusted.root,
-        }
+      ? requireBoundedAuthorityBinding
+        ? await this.#resolveBoundedHostProfileOverride(client, effectiveConfig, effectiveCwd, timeoutMs, allowedProfiles, trusted)
+        : {
+            profileId: this.#profileOverride,
+            source: "host-profile-override",
+            trustedAncestor: trusted.root,
+          }
       : await this.#resolveCodexProfile(client, effectiveConfig, effectiveCwd, timeoutMs, allowedProfiles, {
           allowTrustedReadOnlyDownscope: access === "readOnly",
         });
@@ -674,6 +694,60 @@ export class CodexAuthorityExecutor {
     };
   }
 
+  async #resolveBoundedHostProfileOverride(client, effectiveConfig, cwd, timeoutMs, allowedProfiles, trusted) {
+    if (this.#profileOverride !== ":read-only") {
+      throw new Error("authority binding failed closed: host profile override is not the complete :read-only v1 authority identity");
+    }
+    if (!allowedProfiles.has(":read-only")) {
+      throw new Error("authority binding failed closed: host :read-only profile override is not currently allowed");
+    }
+    if (!trusted) {
+      throw new Error("authority binding failed closed: host profile override requires an explicitly trusted authority root");
+    }
+
+    const authorityRoot = await this.#validateCwd(trusted.root);
+    let resolverConfig = effectiveConfig;
+    if (normalizeConfigPath(authorityRoot) !== normalizeConfigPath(cwd)) {
+      const rootConfigRead = await client.request("config/read", {
+        cwd: authorityRoot,
+        includeLayers: false,
+      });
+      resolverConfig = rootConfigRead?.config;
+      if (!resolverConfig || typeof resolverConfig !== "object") {
+        throw new Error("authority binding failed closed: Codex config/read returned no config for the trusted authority root");
+      }
+    }
+
+    const started = await client.request(
+      "thread/start",
+      {
+        cwd: authorityRoot,
+        ephemeral: true,
+        permissions: ":read-only",
+        config: buildQuietSessionConfig(resolverConfig),
+      },
+      { timeoutMs: Math.min(timeoutMs + this.#watchdogGraceMs, 15_000) }
+    );
+    if (started?.activePermissionProfile?.id !== ":read-only") {
+      throw new Error("authority binding failed closed: thread/start did not accept the host :read-only profile override");
+    }
+    const runtimeWorkspaceRoots = started?.runtimeWorkspaceRoots;
+    if (!Array.isArray(runtimeWorkspaceRoots) || !runtimeWorkspaceRoots.some((root) => normalizeConfigPath(root) === normalizeConfigPath(authorityRoot))) {
+      throw new Error("authority binding failed closed: host profile override conflicts with thread/start runtimeWorkspaceRoots");
+    }
+    if (typeof started?.cwd !== "string" || normalizeConfigPath(started.cwd) !== normalizeConfigPath(authorityRoot)) {
+      throw new Error("authority binding failed closed: host profile override conflicts with thread/start cwd");
+    }
+    const authorityBinding = boundedAuthorityBindingFromStarted(started, ":read-only");
+    assertNoModelOrRuntimeSideEffects(client);
+    return {
+      profileId: ":read-only",
+      source: "host-profile-override",
+      trustedAncestor: trusted.root,
+      authorityBinding,
+    };
+  }
+
   async #probeCompatibilityWithClient(client, effectiveConfig, allowedProfiles) {
     if (!allowedProfiles.has(":read-only")) {
       throw new Error("Codex compatibility gate failed: :read-only permission profile is not currently allowed");
@@ -764,6 +838,14 @@ export class CodexAuthorityExecutor {
   }
 
   #newClient(cwd, requestTimeoutMs) {
+    if (this.#clientFactory) {
+      return this.#clientFactory({
+        cwd,
+        requestTimeoutMs,
+        configOverrides: [...this.#configOverrides],
+        launchEnv: this.#launchEnv ? { ...this.#launchEnv } : null,
+      });
+    }
     return new CodexAppServerClient({
       cwd,
       launch: () => ({
