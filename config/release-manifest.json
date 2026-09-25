@@ -17,7 +17,7 @@
       }
     }
   },
-  "buildId": "9c369c3e217139a59b317bdf0054c6aa093542db4a2486a7be9b9c0e4d16928c",
+  "buildId": "bcdf950c27160b38e6dfbb472ac35ce5aa876ac6a48940849d1df74483bfab7b",
   "files": [
     { "path": "EXPORT_SYNC.md", "sha256": "2016ca37f280451a76cdb95f7223e0aa60f4a4743a41df0e11d6b4157231a839" },
     { "path": "LICENSE", "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4" },
@@ -63,7 +63,7 @@
     { "path": "skills/codexless-browser-repair/SKILL.md", "sha256": "43b24574da21f09ee625e56b56ff753a03f6d35043c1fb3203ae47f43097f647" },
     { "path": "src/agent-card-ui.mjs", "sha256": "7c746482191e781afe6fc2dcb7a9ce41b322007fce4ac2a5d4703a21feca5c91" },
     { "path": "src/agent-resource.mjs", "sha256": "585528b34d8a3f4b4e4d1e797724628972cb1e9d2d843766a12401c4c2f23382" },
-    { "path": "src/agent-tools.mjs", "sha256": "94351bd10da53970a7b8fd67e119b8fd284373401dc944300ba1768dbafa07ba" },
+    { "path": "src/agent-tools.mjs", "sha256": "21b026f5f0caa6bae030e03c050f8d28fb20040925cff9121d34b0bc3ec40d76" },
     { "path": "src/bootstrap-archive.mjs", "sha256": "8ad353e63399126b4a9c766194ee360a767c7d9e2158d19f024b96e64d5e5f3f" },
     { "path": "src/bootstrap-persistence.mjs", "sha256": "5641812542306bfb48d0503721fc9d586ae987fcc23c4c4e4032d7543a2d68a5" },
     { "path": "src/bootstrap-updater.mjs", "sha256": "8fc1d19dfebcb956aa8b9887190830efc13141253ae407cb14b8629ffc428c3f" },

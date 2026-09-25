@@ -236,7 +236,7 @@ for (const profileState of ["missing", "required", "false"]) {
     assert.deepEqual(prepared.structuredContent.authorityBinding, {
       permissionProfile: "prepared-test-authority", sandboxType: "readOnly", networkAccess: false,
     });
-    assert.equal(harness.starts.length, 0, "prepare must not reach agentExecutor.start/thread-start/turn-start");
+    assert.equal(harness.starts.length, 0, "prepare must not reach agentExecutor.start or formal-agent turn start");
   });
 }
 
